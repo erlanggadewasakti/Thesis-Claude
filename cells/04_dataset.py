@@ -111,10 +111,10 @@ val_dataset = MVSADataset(val_df, val_transform, tokenizer)
 test_dataset = MVSADataset(test_df, val_transform, tokenizer)
 
 train_loader = DataLoader(train_dataset, batch_size=HP.BATCH_SIZE, shuffle=True,
-                          num_workers=2, pin_memory=True, drop_last=False)
+                          num_workers=0, pin_memory=True, drop_last=False)
 val_loader = DataLoader(val_dataset, batch_size=HP.BATCH_SIZE, shuffle=False,
-                        num_workers=2, pin_memory=True)
+                        num_workers=0, pin_memory=True)
 test_loader = DataLoader(test_dataset, batch_size=HP.BATCH_SIZE, shuffle=False,
-                         num_workers=2, pin_memory=True)
+                         num_workers=0, pin_memory=True)
 
 print(f"\nDataLoaders ready. Train batches: {len(train_loader)}")
