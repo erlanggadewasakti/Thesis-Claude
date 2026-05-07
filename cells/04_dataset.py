@@ -4,19 +4,19 @@
 
 # --- Hyperparameters ---
 class HP:
-    PROJ_DIM = 256          # Projection dimension d
-    BACKBONE_LR = 2e-5      # BERT & ResNet learning rate
-    HEAD_LR = 1e-3           # EDL heads & co-attention LR
-    WEIGHT_DECAY = 0.01
+    PROJ_DIM = 128           # Reduced: 256→128 to limit capacity on small dataset
+    BACKBONE_LR = 5e-6       # Reduced: 2e-5→5e-6 to prevent backbone overfitting
+    HEAD_LR = 5e-4           # Reduced: 1e-3→5e-4 for smoother convergence
+    WEIGHT_DECAY = 0.02      # Increased: 0.01→0.02 for stronger L2 regularization
     BATCH_SIZE = 32
     MAX_EPOCHS = 50
-    KL_ANNEALING_EPOCHS = 10
-    FOCAL_GAMMA = 1.0
+    KL_ANNEALING_EPOCHS = 5  # Faster: 10→5 so KL regularizer kicks in earlier
+    FOCAL_GAMMA = 2.0        # Increased: 1.0→2.0 to ignore easy samples harder
     CLASS_WEIGHT_BETA = 0.99
-    DROPOUT = 0.3
+    DROPOUT = 0.5            # Increased: 0.3→0.5 for stronger regularization
     GRAD_CLIP_NORM = 1.0
-    EARLY_STOP_PATIENCE = 8
-    BACKBONE_FREEZE_EPOCHS = 3
+    EARLY_STOP_PATIENCE = 10
+    BACKBONE_FREEZE_EPOCHS = 8  # Extended: 3→8 to prevent early memorization
     MAX_TEXT_LEN = 128
     NUM_CLASSES = 3
     IMG_SIZE = 224

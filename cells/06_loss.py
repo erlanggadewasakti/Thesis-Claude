@@ -58,10 +58,11 @@ def head_loss(alpha, y_onehot, class_weights, epoch, gamma=1.0, kl_epochs=10):
 
 
 def total_loss(outputs, y_onehot, class_weights, epoch, max_epoch,
-               gamma=1.0, kl_epochs=10):
+               gamma=1.0, kl_epochs=10, outputs2=None):
     """
     Total multi-task loss with dynamic auxiliary blending.
-    L = w_aux * (L_text + L_image + L_coattn) + 1.0 * L_final
+    L = w_aux * (L_text + L_image + L_coattn) + 1.0 * L_final + rdrop
+    If outputs2 is provided, adds R-Drop consistency regularization.
     """
     L_t = head_loss(outputs["alpha_t"], y_onehot, class_weights, epoch, gamma, kl_epochs)
     L_v = head_loss(outputs["alpha_v"], y_onehot, class_weights, epoch, gamma, kl_epochs)
@@ -71,6 +72,18 @@ def total_loss(outputs, y_onehot, class_weights, epoch, max_epoch,
     # Dynamic auxiliary weight: strong early (regularize), weak late (fine-tune)
     w_aux = max(0.1, 1.0 - epoch / max_epoch)
 
-    return w_aux * (L_t + L_v + L_c) + 1.0 * L_f
+    loss = w_aux * (L_t + L_v + L_c) + 1.0 * L_f
 
-print("Loss functions defined.")
+    # R-Drop consistency regularization
+    if outputs2 is not None:
+        def rdrop_kl(a1, a2):
+            s1, s2 = a1.sum(1, keepdim=True), a2.sum(1, keepdim=True)
+            p1, p2 = a1 / s1, a2 / s2
+            kl_12 = (p1 * (p1.log() - p2.log())).sum(1).mean()
+            kl_21 = (p2 * (p2.log() - p1.log())).sum(1).mean()
+            return (kl_12 + kl_21) / 2
+
+        rdrop = rdrop_kl(outputs["alpha_f"], outputs2["alpha_f"])
+        loss = loss + 0.5 * rdrop
+
+    return loss

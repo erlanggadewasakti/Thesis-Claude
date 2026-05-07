@@ -19,6 +19,8 @@ def train_one_epoch(model, loader, optimizer, class_weights, epoch, max_epoch):
     else:
         set_backbone_grad(model, True)
 
+    use_rdrop = epoch >= HP.BACKBONE_FREEZE_EPOCHS  # R-Drop only after unfreeze
+
     total_loss_val = 0
     all_preds, all_labels = [], []
 
@@ -34,11 +36,17 @@ def train_one_epoch(model, loader, optimizer, class_weights, epoch, max_epoch):
 
         outputs = model(input_ids, attention_mask, images)
 
+        # R-Drop: second forward pass with different dropout masks
+        outputs2 = None
+        if use_rdrop:
+            outputs2 = model(input_ids, attention_mask, images)
+
         loss = total_loss(
             outputs, y_onehot, class_weights,
             epoch, max_epoch,
             gamma=HP.FOCAL_GAMMA,
-            kl_epochs=HP.KL_ANNEALING_EPOCHS
+            kl_epochs=HP.KL_ANNEALING_EPOCHS,
+            outputs2=outputs2
         )
 
         loss.backward()
