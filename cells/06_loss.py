@@ -2,25 +2,32 @@
 # CELL 6: LOSS FUNCTIONS — Focal-EDL + KL Regularizer
 # ============================================================
 
-def focal_edl_loss(alpha, y_onehot, class_weights, gamma=1.0):
+def focal_edl_loss(alpha, y_onehot, class_weights, gamma=2.0):
     """
-    Focal-weighted EDL loss (SSE Bayes Risk).
-    - class_weights: static per-class weight (effective number)
+    Focal-weighted EDL loss (SSE Bayes Risk) with neutral-aware boost.
+    - class_weights: static per-class weight (inverse sqrt)
     - focal: dynamic per-sample weight based on prediction confidence
+    - neutral_boost: Fix 4 — extra 3× penalty for neutral samples
     """
     S = alpha.sum(dim=1, keepdim=True)             # (B, 1)
     p_hat = alpha / S                               # (B, K)
 
     # Focal weight: (1 - p_correct)^gamma
     p_correct = (p_hat * y_onehot).sum(dim=1, keepdim=True)  # (B, 1)
-    focal_w = (1 - p_correct.detach()) ** gamma     # (B, 1) — detach to avoid instability
+    focal_w = (1 - p_correct.detach()) ** gamma     # (B, 1)
 
     # EDL components
     err = (y_onehot - p_hat) ** 2                   # (B, K)
     var = p_hat * (1 - p_hat) / (S + 1)             # (B, K)
 
-    # Combined weighting: focal (per-sample) × class_weight (per-class)
-    loss = focal_w * class_weights.unsqueeze(0) * (err + var)  # (B, K)
+    # Fix 4: Neutral-aware boost — 3× extra penalty for neutral samples
+    # neutral_mask = 1 for neutral samples, 0 otherwise
+    neutral_mask = y_onehot[:, 1:2]                # (B, 1) — class index 1 = neutral
+    sample_boost = 1.0 + HP.NEUTRAL_BOOST * neutral_mask  # (B, 1): 3× for neutral, 1× others
+
+    # Combined: focal × neutral_boost × class_weight (per-class)
+    # For neutral: 1.0 × 3.0 × 1.50 = 4.50× total vs positive: 1.0 × 1.0 × 0.63 = 0.63×
+    loss = focal_w * sample_boost * class_weights.unsqueeze(0) * (err + var)  # (B, K)
 
     return loss.sum(dim=1).mean()
 

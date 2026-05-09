@@ -2,17 +2,44 @@
 # CELL 8: TRAINING LOOP
 # ============================================================
 
-# --- Optimizer with differential LR ---
-optimizer = torch.optim.AdamW([
-    {"params": model.text_backbone.parameters(), "lr": HP.BACKBONE_LR},
-    {"params": model.image_backbone.parameters(), "lr": HP.BACKBONE_LR},
-    {"params": model.text_proj.parameters(), "lr": HP.HEAD_LR},
-    {"params": model.image_proj.parameters(), "lr": HP.HEAD_LR},
-    {"params": model.co_attention.parameters(), "lr": HP.HEAD_LR},
-    {"params": model.text_edl_head.parameters(), "lr": HP.HEAD_LR},
-    {"params": model.image_edl_head.parameters(), "lr": HP.HEAD_LR},
-    {"params": model.coattn_edl_head.parameters(), "lr": HP.HEAD_LR},
-], weight_decay=HP.WEIGHT_DECAY)
+# --- Fix 6: Layerwise LR decay for BERT ---
+def get_layerwise_lr_params(model, bert_base_lr=5e-6, lr_decay=0.85, head_lr=5e-4):
+    """BERT layer-wise LR decay: lower layers get smaller LR."""
+    params = []
+
+    # BERT embeddings — smallest LR
+    params.append({
+        "params": model.text_backbone.embeddings.parameters(),
+        "lr": bert_base_lr * (lr_decay ** 12)
+    })
+
+    # BERT encoder layers — gradual increase
+    for i, layer in enumerate(model.text_backbone.encoder.layer):
+        lr = bert_base_lr * (lr_decay ** (11 - i))
+        params.append({"params": layer.parameters(), "lr": lr})
+
+    # BERT pooler
+    if model.text_backbone.pooler is not None:
+        params.append({
+            "params": model.text_backbone.pooler.parameters(),
+            "lr": bert_base_lr
+        })
+
+    # ResNet — same backbone LR
+    params.append({"params": model.image_backbone.parameters(), "lr": bert_base_lr})
+
+    # All heads — higher LR
+    for module in [model.text_proj, model.image_proj, model.co_attention,
+                   model.text_edl_head, model.image_edl_head, model.coattn_edl_head,
+                   model.image_attn_pool, model.text_attn_pool]:
+        params.append({"params": module.parameters(), "lr": head_lr})
+
+    return params
+
+optimizer = torch.optim.AdamW(
+    get_layerwise_lr_params(model, bert_base_lr=HP.BACKBONE_LR, lr_decay=HP.LR_DECAY, head_lr=HP.HEAD_LR),
+    weight_decay=HP.WEIGHT_DECAY
+)
 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
     optimizer, T_0=10, T_mult=2

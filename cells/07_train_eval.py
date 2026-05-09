@@ -10,6 +10,26 @@ def set_backbone_grad(model, requires_grad):
         p.requires_grad = requires_grad
 
 
+def mixup_batch(images, y_onehot, alpha=0.4):
+    """
+    Mixup: interpolasi antar-sampel untuk augmentasi.
+    Hanya untuk image — text tidak bisa di-mix (discrete tokens).
+    """
+    if alpha <= 0:
+        return images, y_onehot
+
+    lam = np.random.beta(alpha, alpha)
+    lam = max(lam, 1 - lam)  # Pastikan lam >= 0.5 (sample asli dominan)
+
+    batch_size = images.size(0)
+    index = torch.randperm(batch_size, device=images.device)
+
+    mixed_images = lam * images + (1 - lam) * images[index]
+    mixed_y = lam * y_onehot + (1 - lam) * y_onehot[index]
+
+    return mixed_images, mixed_y
+
+
 def train_one_epoch(model, loader, optimizer, class_weights, epoch, max_epoch):
     model.train()
 
@@ -31,6 +51,11 @@ def train_one_epoch(model, loader, optimizer, class_weights, epoch, max_epoch):
         images = batch["image"].to(device)
         labels = batch["label"].to(device)
         y_onehot = F.one_hot(labels, HP.NUM_CLASSES).float()
+
+        # Fix 5: Mixup augmentation (50% chance per batch, only after backbone unfreeze)
+        use_mixup = (epoch >= HP.BACKBONE_FREEZE_EPOCHS) and (random.random() < 0.5)
+        if use_mixup:
+            images, y_onehot = mixup_batch(images, y_onehot, alpha=HP.MIXUP_ALPHA)
 
         optimizer.zero_grad()
 

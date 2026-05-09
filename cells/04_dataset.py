@@ -7,19 +7,21 @@ class HP:
     PROJ_DIM = 128           # Reduced: 256→128 to limit capacity on small dataset
     BACKBONE_LR = 5e-6       # Reduced: 2e-5→5e-6 to prevent backbone overfitting
     HEAD_LR = 5e-4           # Reduced: 1e-3→5e-4 for smoother convergence
+    LR_DECAY = 0.85          # Layerwise LR decay factor for BERT
     WEIGHT_DECAY = 0.02      # Increased: 0.01→0.02 for stronger L2 regularization
     BATCH_SIZE = 32
     MAX_EPOCHS = 50
-    KL_ANNEALING_EPOCHS = 5  # Faster: 10→5 so KL regularizer kicks in earlier
-    FOCAL_GAMMA = 2.0        # Increased: 1.0→2.0 to ignore easy samples harder
-    CLASS_WEIGHT_BETA = 0.99
-    DROPOUT = 0.5            # Increased: 0.3→0.5 for stronger regularization
+    KL_ANNEALING_EPOCHS = 5  # KL regularizer kicks in earlier
+    FOCAL_GAMMA = 2.0        # Ignore easy samples harder
+    DROPOUT = 0.5            # Stronger regularization
     GRAD_CLIP_NORM = 1.0
     EARLY_STOP_PATIENCE = 10
     BACKBONE_FREEZE_EPOCHS = 8  # Extended: 3→8 to prevent early memorization
     MAX_TEXT_LEN = 128
     NUM_CLASSES = 3
     IMG_SIZE = 224
+    MIXUP_ALPHA = 0.4        # Mixup interpolation strength
+    NEUTRAL_BOOST = 2.0      # Extra loss multiplier for neutral samples
 
 # --- Train/Val/Test Split ---
 train_df, test_df = train_test_split(
@@ -36,15 +38,16 @@ test_df = test_df.reset_index(drop=True)
 print(f"Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
 print(f"Train label distribution:\n{train_df['label'].value_counts().sort_index()}")
 
-# --- Compute Effective Number Class Weights ---
+# --- Fix 1: Inverse Sqrt Class Weights ---
+# Effective number with beta=0.99 produced near-flat weights [0.99, 1.03, 0.99]
+# Inverse sqrt gives more discriminative weights: neg≈0.88, neu≈1.50, pos≈0.63
 class_counts = train_df["label"].value_counts().sort_index().values.astype(float)
-beta = HP.CLASS_WEIGHT_BETA
-effective_num = 1.0 - np.power(beta, class_counts)
-weights = (1.0 - beta) / effective_num
+weights = 1.0 / np.sqrt(class_counts)
 class_weights = torch.tensor(
     weights / weights.sum() * HP.NUM_CLASSES, dtype=torch.float32
 ).to(device)
-print(f"Class weights (effective number): {class_weights}")
+print(f"Class weights (inverse sqrt): {class_weights}")
+print(f"  neg={class_weights[0]:.4f}, neu={class_weights[1]:.4f}, pos={class_weights[2]:.4f}")
 
 # --- Image Transforms ---
 train_transform = transforms.Compose([
@@ -110,11 +113,31 @@ train_dataset = MVSADataset(train_df, train_transform, tokenizer)
 val_dataset = MVSADataset(val_df, val_transform, tokenizer)
 test_dataset = MVSADataset(test_df, val_transform, tokenizer)
 
-train_loader = DataLoader(train_dataset, batch_size=HP.BATCH_SIZE, shuffle=True,
-                          num_workers=0, pin_memory=True, drop_last=False)
+# --- Fix 2: WeightedRandomSampler to oversample minority classes ---
+# Neutral (10%) gets 5.7× more samples, negative (30%) gets 2.0× more
+from torch.utils.data import WeightedRandomSampler
+_max_count = float(class_counts.max())  # = 1878 (positive)
+label_to_sample_w = {
+    0: _max_count / class_counts[0],  # neg: 1878/950 ≈ 1.98×
+    1: _max_count / class_counts[1],  # neu: 1878/329 ≈ 5.71× oversample!
+    2: 1.0,                           # pos: baseline
+}
+sample_weights = [label_to_sample_w[l] for l in train_df["label"].values]
+sampler = WeightedRandomSampler(
+    weights=sample_weights,
+    num_samples=len(train_df),
+    replacement=True
+)
+
+train_loader = DataLoader(
+    train_dataset, batch_size=HP.BATCH_SIZE,
+    sampler=sampler,  # replaces shuffle=True
+    num_workers=0, pin_memory=True, drop_last=False
+)
 val_loader = DataLoader(val_dataset, batch_size=HP.BATCH_SIZE, shuffle=False,
                         num_workers=0, pin_memory=True)
 test_loader = DataLoader(test_dataset, batch_size=HP.BATCH_SIZE, shuffle=False,
                          num_workers=0, pin_memory=True)
 
 print(f"\nDataLoaders ready. Train batches: {len(train_loader)}")
+print(f"WeightedRandomSampler: neg×{label_to_sample_w[0]:.1f}, neu×{label_to_sample_w[1]:.1f}, pos×{label_to_sample_w[2]:.1f}")

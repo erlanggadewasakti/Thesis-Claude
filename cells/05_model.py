@@ -1,6 +1,28 @@
 # ============================================================
-# CELL 5: MODEL ARCHITECTURE — UA-EDL-CoAttn v2
+# CELL 5: MODEL ARCHITECTURE — UA-EDL-CoAttn v3
 # ============================================================
+
+# ----- Fix 3: Attention Pooling (replaces mean pool & CLS) -----
+class AttentionPool(nn.Module):
+    """
+    Learned attention pooling over a sequence.
+    Focuses on the most sentiment-relevant regions/tokens.
+    Replaces mean pooling (which averages out sentiment signal).
+    """
+    def __init__(self, dim):
+        super().__init__()
+        self.attn_w = nn.Sequential(
+            nn.Linear(dim, dim // 2),
+            nn.Tanh(),
+            nn.Linear(dim // 2, 1)
+        )
+
+    def forward(self, x):
+        # x: (B, N, d)
+        scores = self.attn_w(x)             # (B, N, 1)
+        weights = F.softmax(scores, dim=1)  # (B, N, 1) — softmax over sequence
+        return (weights * x).sum(dim=1)     # (B, d) — weighted sum
+
 
 # ----- Stage 4: Dempster's Combination Rule -----
 class DempsterCombination(nn.Module):
@@ -143,6 +165,10 @@ class UAEDLCoAttn(nn.Module):
         # --- Stage 4: Dempster's Combination ---
         self.dempster = DempsterCombination(num_classes)
 
+        # --- Fix 3: Attention Pooling (replaces mean pool / CLS) ---
+        self.image_attn_pool = AttentionPool(proj_dim)
+        self.text_attn_pool  = AttentionPool(proj_dim)
+
     def extract_image_features(self, images):
         """Stage 1a: Image → H_v (B, 49, d)"""
         feat = self.image_backbone(images)           # (B, 2048, 7, 7)
@@ -169,17 +195,20 @@ class UAEDLCoAttn(nn.Module):
         H_t_prime, H_v_prime = self.co_attention(H_t, H_v, text_mask=attention_mask)
 
         # === Stage 3a: Image Head (BEFORE co-attention → unimodal) ===
-        h_v_pool = H_v.mean(dim=1)                   # (B, d)
+        # Fix 3: Attention pool instead of mean pool
+        h_v_pool = self.image_attn_pool(H_v)         # (B, d)
         alpha_v, u_v = self.image_edl_head(h_v_pool)
 
         # === Stage 3b: Co-Attention Head (AFTER co-attention → cross-modal) ===
-        h_v_att = H_v_prime.mean(dim=1)               # (B, d)
-        h_t_att = H_t_prime.mean(dim=1)               # (B, d)
+        # Fix 3: Attention pool for both attended features
+        h_v_att = self.image_attn_pool(H_v_prime)    # (B, d)
+        h_t_att = self.text_attn_pool(H_t_prime)     # (B, d)
         h_cross = torch.cat([h_v_att, h_t_att], dim=-1)  # (B, 2d)
         alpha_c, u_c = self.coattn_edl_head(h_cross)
 
         # === Stage 3c: Text Head (BEFORE co-attention → unimodal) ===
-        h_t_cls = H_t[:, 0, :]                        # (B, d) CLS token
+        # Fix 3: Attention pool instead of CLS token
+        h_t_cls = self.text_attn_pool(H_t)           # (B, d)
         alpha_t, u_t = self.text_edl_head(h_t_cls)
 
         # === Stage 4: Dempster's Combination ===
